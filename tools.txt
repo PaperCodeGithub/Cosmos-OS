@@ -1,0 +1,4 @@
+~Text Editor
+~Make
+~Nasm
+~qemu ( Emulator )

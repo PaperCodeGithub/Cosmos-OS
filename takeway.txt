@@ -1,0 +1,46 @@
+# Assembly
+~ mnemonic (number of parameters/Operands)
+~ Diffrent in diffrent proccesors
+~ This codes are in x86 assembly
+
+~ Directive: Gives a way to assembler that will affect how the program gets compiled.
+	eg. bits (bits 16) tells assember to emit 16 but code
+	
+~ Instruction: Translated into machine code that will execute.
+
+# How computer starts up?
+~ BIOS is copied from ROM chip to RAM (Address 7c00)
+~ BIOS starts
+	- Initialize Hardwares
+	- Run some tests (POST = Power on self test)
+~ BIOS searches for an OS
+~ Loads The OS
+
+# How BIOS finds as OS?
+~ Legacy Booting:
+	BIOS loads the first sector of each bootable device into memory.
+	Then it checks for signature 0xAA55. If found start executing...
+~ EFI:
+	BIOS looks into special EFI partitions, but OS must be compiled as a 
+	EFI program.
+
+# Registors
+~ Registors are small memory sections on CPU that can be written fast
+	Search x86 CPU registors
+	- General purpose registers:  Used for arithmetic, logic, and data storage
+	- Segment Registers: Define memory segments.
+	- Pointer and Index Registers: Search on google
+	- Flags Register (EFLAGS): Contains status information, such as zero (ZF), carry (CF), and sign (SF) flags.
+	- Floating-Point/SIMD Registers (Modern x86): 
+		XMM0–XMM15: 128-bit registers for floating-point and SIMD operations.
+		YMM0–YMM15: 256-bit registers for advanced SIMD operations.
+		
+# Memory Segmentation:
+	real_add = segment * 16 + offset
+	CS = currently running code segment
+	DS =  data segment
+	SS = stack segment
+	ES, FS, GS = extra data segments
+
+# Referencing Memory Location
+~ segment = base + index * scale + displacement
