@@ -10,20 +10,31 @@ LDFLAGS = -m elf_i386 -Ttext 0x1000 --oformat binary
 
 .PHONY: all floppy_image kernel bootloader clean always run
 
-all: floppy_image
+all: floppy_image hdd_image
 
 #
-# Floppy Image
+# Floppy Image (Bootloader and Kernel ONLY)
 #
 floppy_image: $(BUILD_DIR)/main_floppy.img
 
 $(BUILD_DIR)/main_floppy.img: bootloader kernel
 	dd if=/dev/zero of=$(BUILD_DIR)/main_floppy.img bs=512 count=2880
-	mkfs.fat -F 12 -n "NBOS" $(BUILD_DIR)/main_floppy.img
+	mkfs.fat -F 12 -n "COSMOS" $(BUILD_DIR)/main_floppy.img
 	dd if=$(BUILD_DIR)/bootloader.bin of=$(BUILD_DIR)/main_floppy.img conv=notrunc
 	mcopy -i $(BUILD_DIR)/main_floppy.img $(BUILD_DIR)/kernel.bin "::kernel.bin"
 
+
 #
+# Hard Drive Image (FAT32 and User Files ONLY)
+#
+hdd_image: always
+	dd if=/dev/zero of=$(BUILD_DIR)/hdd.img bs=1M count=64
+	mkfs.fat -F 32 -n "COSMOS_DRV" $(BUILD_DIR)/hdd.img
+	mmd -i $(BUILD_DIR)/hdd.img ::DOCS
+	mcopy -i $(BUILD_DIR)/hdd.img welcome.txt "::DOCS/welcome.txt"
+
+
+#	
 # Bootloader
 #
 bootloader: $(BUILD_DIR)/bootloader.bin
@@ -66,5 +77,6 @@ clean:
 #
 # Run
 #
-run: floppy_image
-	$(QEMU) -fda $(BUILD_DIR)/main_floppy.img
+run: floppy_image hdd_image
+	$(QEMU) -boot a -fda $(BUILD_DIR)/main_floppy.img -drive format=raw,file=$(BUILD_DIR)/hdd.img,index=0,media=disk
+	

@@ -149,7 +149,7 @@ main:
     
     ; Load Kernel 
     mov ax, 33                  ; LBA 33 
-    mov cl, 15                   ; Read 15 sector
+    mov cl, 30                   ; Read 30 sector
     mov dl, [BOOT_DRIVE]        ; Disk ID
     mov bx, KERNEL_OFFSET       ; Buffer 0x1000
     call disk_read

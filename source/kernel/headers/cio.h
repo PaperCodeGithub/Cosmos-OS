@@ -3,6 +3,7 @@
 
 #include <stdarg.h>
 #include <stdint.h>
+#include "ports/ports_io.h"
 
 // --- Global Keyboard State ---
 #define KBD_BUFFER_SIZE 256
@@ -14,39 +15,6 @@ volatile int kbd_enter_pressed = 0; // Acts as a boolean flag
 #define VGA_COLS 80
 #define VGA_ROWS 25
 
-// PIC Ports
-#define PIC1_COMMAND 0x20
-#define PIC1_DATA    0x21
-#define PIC2_COMMAND 0xA0
-#define PIC2_DATA    0xA1
-#define ICW1_INIT    0x11
-#define ICW4_8086    0x01
-
-// ==========================================================================
-// 1. HARDWARE I/O PORTS
-// ==========================================================================
-
-// Send a single byte to a port
-static inline void port_byte_out(unsigned short port, unsigned char data) {
-    __asm__ volatile("out %%al, %%dx" : : "a" (data), "d" (port));
-}
-
-// Send a 16-bit word to a port (Used for QEMU Shutdown)
-static inline void port_word_out(unsigned short port, unsigned short data) {
-    __asm__ volatile("out %%ax, %%dx" : : "a" (data), "d" (port));
-}
-
-// Reads a single byte from a specified CPU port
-static inline unsigned char port_byte_in(unsigned short port) {
-    unsigned char result;
-    __asm__ volatile("in %%dx, %%al" : "=a" (result) : "d" (port));
-    return result;
-}
-
-// Forces the CPU to wait 1 microsecond (allows older hardware to catch up)
-static inline void io_wait() {
-    port_byte_out(0x80, 0); 
-}
 
 // ==========================================================================
 // 2. VGA DISPLAY DRIVER
@@ -157,22 +125,53 @@ void print_string(const char* str) {
 // ==========================================================================
 // 4. INTERRUPT DESCRIPTOR TABLE (IDT)
 // ==========================================================================
+/*
+    IDT is an array of exactly 256 entries in RAM. Each entry is an 8-byte block of data called a "Gate."
+    The CPU goes through a loop, filling these entries with memory addresses. It is essentially writing down rules:
+
+    "If someone triggers Interrupt 0 (Divide by Zero), jump to memory address 0x..."
+    "If someone triggers Interrupt 14 (Page Fault), jump to memory address 0x..."
+
+    Finally, the CPU executes a very special assembly instruction: lidt (Load IDT).
+    It takes the physical memory address of this array and burns it into a special hardware register inside the CPU called the IDTR. 
+    Now, the CPU permanently knows where the emergency rulebook is located in RAM.
+*/
+
+
+/*
+    When you press 'K', the keyboard sends an electrical pulse to the PIC. The PIC tells the CPU: 
+    "Execute Event 33!" The CPU stops everything, looks at slot 33 in the IDT, and blindly jumps to the memory address written there. 
+    That address points to your keyboard_handler_main function. Inside that function is where your code actually asks the keyboard, 
+    "Okay, what key was it?" and finds out it was 'K'.
+*/
 
 struct idt_entry {
-    uint16_t base_low;
-    uint16_t sel;
-    uint8_t  always0;
-    uint8_t  flags;
-    uint16_t base_high;
+    uint16_t base_low;  // The bottom 16 bits of your function's memory address.
+    uint16_t sel;       // You put 0x08 here. This tells the CPU, "The code I am jumping to belongs to the Kernel, so give it full permissions."
+    uint8_t  always0;   // Literally must be a zero. The hardware demands it.
+    uint8_t  flags;     // ou put 0x8E here. 0x8E in binary is 10001110. It tells the CPU: "This gate is Present (1), it runs in Ring 0 Kernel Mode (00), and it is a 32-bit Interrupt Gate (01110)."
+    uint16_t base_high; // The top 16 bits of your function's memory address.
 } __attribute__((packed));
 
 struct idt_ptr {
-    uint16_t limit;
-    uint32_t base;
-} __attribute__((packed));
+    uint16_t limit;         // 2 bytes: The size of the table
+    uint32_t base;          // 4 bytes: The memory address of the table
+} __attribute__((packed));  // "packed" tells C not to add invisible padding
 
 struct idt_entry idt[256];
 struct idt_ptr idtp;
+
+/*
+    If we want the CPU to jump to a 32-bit memory address (let's say 0x12345678), why don't we just have uint32_t address;? 
+    Why chop it into base_low and base_high?
+    The Answer: 1980s backwards compatibility. When Intel built the 32-bit 386 processor, they had to make it compatible with the old 16-bit 286 processor. 
+    Because of how the old chips were wired, Intel forced programmers to chop their 32-bit addresses in half and stick the old flags in the middle.
+
+    The lidt assembly instruction refuses to just take a memory address. 
+    It demands a very specific 6-byte package. 
+    It needs to know exactly how big the table is (2 bytes), followed immediately by where the table is (4 bytes).
+
+*/
 
 void idt_set_gate(unsigned char num, uint32_t base, uint16_t sel, uint8_t flags) {
     idt[num].base_low = (base & 0xFFFF);
@@ -184,10 +183,10 @@ void idt_set_gate(unsigned char num, uint32_t base, uint16_t sel, uint8_t flags)
 
 // Installs the IDT directly into the CPU
 void idt_install() {
-    idtp.limit = (sizeof(struct idt_entry) * 256) - 1;
-    idtp.base = (uint32_t) &idt;
+    idtp.limit = (sizeof(struct idt_entry) * 256) - 1;  //This calculates 8 bytes * 256 entries = 2048. Intel oddly requires the size to be exactly one byte less than the true size, so we subtract 1 to get 2047.
+    idtp.base = (uint32_t) &idt;                        // This just grabs the physical memory address of your idt array.
     for(int i = 0; i < 256; i++) {
-        idt_set_gate(i, 0, 0, 0);
+        idt_set_gate(i, 0, 0, 0);                       // Initalize all mapped functions to null, we will fill it later
     }
     __asm__ volatile("lidt %0" : : "m" (idtp));
 }
@@ -197,22 +196,84 @@ void idt_install() {
 // ==========================================================================
 
 // Remaps the hardware interrupts to prevent fatal CPU exceptions
-void pic_remap() {
-    unsigned char a1 = port_byte_in(PIC1_DATA);
-    unsigned char a2 = port_byte_in(PIC2_DATA);
 
+/*
+
+
+*/
+
+
+void pic_remap() {
+    unsigned char a1 = port_byte_in(PIC1_DATA); // 0x21 is the Master PIC's Data Port
+    unsigned char a2 = port_byte_in(PIC2_DATA); // 0xA1 is the Slave PIC's Data Port
+
+    /*
+        When you read from the PIC's Data port before you start reconfiguring it, the PIC returns its Interrupt Mask Register (IMR).
+
+        What is the IMR?
+        It is exactly 8 bits (1 byte) long. Each bit represents one of the hardware pins plugged into the PIC.
+        If a bit is 1, that device is Masked (Muted). The PIC will ignore it. If a bit is 0, that device is Unmasked (Listening).
+
+        The CPU's Perspective:
+        When the CPU executes these two lines, it is asking the Master and Slave PICs: 
+        "Hey, before I wipe your memory and completely reconfigure your offsets, 
+        tell me exactly which hardware devices are currently muted and which ones are unmuted."
+
+        After the CPU finishes rewiring the PICs, it writes those exact same bytes back to the mailboxes. 
+        It is saying: "Okay, reconfiguration complete. Go back to muting whoever you were muting before we started."
+
+
+        Master PIC (a1):
+        Pin 0: System Timer (The PIT we built!)
+        Pin 1: Keyboard
+        Pin 2: [The wire connecting to the Slave PIC]
+        Pin 3: COM2 (Serial Port)
+        Pin 4: COM1 (Serial Port)
+
+        Slave PIC (a2):
+        Pin 8: Real-Time Clock
+        Pin 12: PS/2 Mouse
+        Pin 14: Primary Hard Drive (ATA)
+        Pin 15: Secondary Hard Drive
+    */
+
+
+    /*
+    
+        The 8259 PIC chips were designed in the 1970s. Your modern CPU runs at billions of cycles per second (Gigahertz), but the PIC chip is incredibly slow.
+        If your C code blasts all these outb commands at the PIC instantly, the PIC will choke, drop the data, and break. 
+        io_wait() is usually a tiny assembly function that wastes exactly 1 microsecond of time, 
+        giving the ancient PIC chip enough time to swallow the data before the CPU shoves the next byte down its throat.
+    
+    */
+
+
+    // Wake up calls
     port_byte_out(PIC1_COMMAND, ICW1_INIT); io_wait();
     port_byte_out(PIC2_COMMAND, ICW1_INIT); io_wait();
     
-    port_byte_out(PIC1_DATA, 0x20); io_wait(); // Master starts at INT 32
-    port_byte_out(PIC2_DATA, 0x28); io_wait(); // Slave starts at INT 40
+    // We send the new starting numbers to the Data ports.
+    port_byte_out(PIC1_DATA, 0x20); io_wait(); // 0x20 is Decimal 32
+    port_byte_out(PIC2_DATA, 0x28); io_wait(); // 0x28 is Decimal 40
+
+    /*
     
+        The CPU is saying: "Master PIC, your new starting offset is 32. 
+        If your pin 0 fires (Timer), tell me it's Event 32. Slave PIC, your starting offset is 40."
+        Why: This successfully moves the hardware signals out of the way of the CPU Panic codes (which occupy 0 through 31).
+    
+    */
+
+    // Physical waring
     port_byte_out(PIC1_DATA, 4); io_wait();
     port_byte_out(PIC2_DATA, 2); io_wait();
     
+
+    // We are running on standard Intel x86 computer architecture.
     port_byte_out(PIC1_DATA, ICW4_8086); io_wait();
     port_byte_out(PIC2_DATA, ICW4_8086); io_wait();
     
+    // Remap prev ones
     port_byte_out(PIC1_DATA, a1);
     port_byte_out(PIC2_DATA, a2);
 }
@@ -489,48 +550,6 @@ void gets(char* out_str) {
     
     // 4. Null-terminate the user's string
     out_str[i] = '\0'; 
-}
-
-
-// ==========================================================================
-// 7. PROGRAMMABLE INTERVAL TIMER (PIT) & SYSTEM CLOCK
-// ==========================================================================
-
-
-volatile uint32_t timer_ticks = 0;
-extern void timer_isr();
-
-// The ISR called by the CPU every single millisecond
-void timer_handler_main() {
-    timer_ticks++; // Increase our system clock by 1 millisecond
-    
-    // ACKNOWLEDGE THE INTERRUPT (Send EOI to the Master PIC)
-    port_byte_out(PIC1_COMMAND, 0x20);
-}
-
-// Configures the hardware PIT to fire at a specific frequency
-void init_timer(uint32_t freq) {
-    // The hardware clock beats at 1193180 Hz. 
-    uint32_t divisor = 1193180 / freq;
-
-    // Send the Command Word to the PIT (Port 0x43)
-    port_byte_out(0x43, 0x36);
-
-    // Send the divisor to Channel 0 (Port 0x40)
-    // We must send it in two pieces: the lower 8 bits, then the upper 8 bits
-    port_byte_out(0x40, (uint8_t)(divisor & 0xFF));
-    port_byte_out(0x40, (uint8_t)((divisor >> 8) & 0xFF));
-}
-
-// Pauses the execution of the OS for a specific amount of milliseconds
-void sleep(uint32_t ms) {
-    uint32_t start_ticks = timer_ticks;
-    
-    // Wait until the system clock has advanced by 'ms' ticks
-    while (timer_ticks < start_ticks + ms) {
-        // Sleep the CPU to save power while we wait!
-        __asm__ volatile("hlt"); 
-    }
 }
 
 
