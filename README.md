@@ -1,4 +1,5 @@
 # Cosmos-OS
+![Project Logo](cosmos-os.png)
 ## Overview
 **COSMOS** is a x86 32-bit Operating System written in C and Assembly. It features a custom 512-byte bootloader that initializes the system in 16-bit Real Mode, reads the kernel from the disk using BIOS interrupts, transitions the CPU into 32-bit Protected Mode, and hands execution over to a C-based kernel.
 
